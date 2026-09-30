@@ -73,7 +73,7 @@ Colour output is turned off when stdout is not a terminal, or when `NO_COLOR` is
 
 ## A note on the log format
 
-Claude Code's session logs are an internal format, not a documented interface, so a Claude Code update could break things.
+Claude Code's session logs are an internal format, not a documented interface, so a Claude Code update could break things. The details of how `att` reads the log are in [TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md).
 
 ## Contributing
 
