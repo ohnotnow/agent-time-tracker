@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ohnotnow/agent-time-tracker/internal/att"
 )
@@ -21,17 +22,53 @@ func main() {
 
 func run(args []string) error {
 	fs := flag.NewFlagSet("att", flag.ContinueOnError)
+	follow := fs.Bool("follow", false, "keep watching, redrawing whenever the session log changes")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: att [session.jsonl | project-dir]\n\nWith no argument, reads the latest Claude Code session for the current directory.")
+		fmt.Fprintln(fs.Output(), "Usage: att [--follow] [session.jsonl | project-dir]\n\nWith no argument, reads the latest Claude Code session for the current directory.")
+		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	colour := useColour()
 
-	path, err := sessionPath(fs.Arg(0))
-	if err != nil {
-		return err
+	if !*follow {
+		path, err := sessionPath(fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		return show(path, colour, "")
 	}
+
+	// Re-resolve the path on every poll, so following a directory moves on
+	// to a new session when one starts; a named .jsonl file stays put.
+	var lastPath string
+	var lastMod time.Time
+	var lastSize int64
+	for ; ; time.Sleep(time.Second) {
+		path, err := sessionPath(fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if path == lastPath && info.ModTime().Equal(lastMod) && info.Size() == lastSize {
+			continue
+		}
+		lastPath, lastMod, lastSize = path, info.ModTime(), info.Size()
+		if colour {
+			fmt.Print("\033[H\033[2J")
+		}
+		if err := show(path, colour, "  -  following, Ctrl-C to stop"); err != nil {
+			return err
+		}
+	}
+}
+
+// show builds the timeline for one session log and draws it.
+func show(path string, colour bool, suffix string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -43,8 +80,8 @@ func run(args []string) error {
 		return err
 	}
 	id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	title := "session " + id[:min(8, len(id))]
-	att.Render(os.Stdout, tl, title, useColour())
+	title := "session " + id[:min(8, len(id))] + suffix
+	att.Render(os.Stdout, tl, title, colour)
 	return nil
 }
 

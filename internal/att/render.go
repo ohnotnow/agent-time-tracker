@@ -30,48 +30,46 @@ func Render(w io.Writer, tl Timeline, title string, colour bool) {
 	scale := longest(tl.Turns)
 	fmt.Fprintf(w, "%s%s  -  %s%s\n\n", p.dim, title, tl.Turns[0].Start.Local().Format("Mon 2 Jan 2006"), p.reset)
 
-	row := func(at time.Time, colour, label, dur, bar, note string) {
-		stamp := ""
-		if !at.IsZero() {
-			stamp = at.Local().Format("15:04:05")
+	stamp := func(at time.Time) string {
+		if at.IsZero() {
+			return ""
 		}
-		fmt.Fprintf(w, "%8s  %s%-7s %-7s %s%s  %s\n", stamp, colour, label, dur, bar, p.reset, note)
+		return at.Local().Format("15:04:05")
 	}
-	said := func(t Turn) string {
-		if t.Prompt == "" {
+	text := func(r Row) string {
+		switch {
+		case r.Message && r.Text == "":
 			return p.dim + "(slash command)" + p.reset
+		case r.Message:
+			return `"` + snippet(r.Text) + `"`
 		}
-		return `"` + snippet(t.Prompt) + `"`
+		return snippet(r.Text)
+	}
+	timed := func(r Row, colour, dur, bar, note string) {
+		fmt.Fprintf(w, "%8s  %s%-7s %-7s %s%s  %s\n", stamp(r.At), colour, r.Kind, dur, bar, p.reset, note)
 	}
 
-	// One stream: the agent works, then waits, and each wait ends with
-	// whatever unblocked it - an approval, an answer, or your next message.
-	first := tl.Turns[0]
-	fmt.Fprintf(w, "%s  %-7s %s\n", first.Start.Local().Format("15:04:05"), "start", said(first))
-	for i, t := range tl.Turns {
-		ait := t.Ait
-		for j, seg := range t.Segments {
-			if seg.Wait {
-				row(time.Time{}, p.you, "waiting", Dur(seg.D), bar(seg.D, scale, '░'), ">> "+snippet(seg.Label))
-				continue
-			}
-			dur, note := Dur(seg.D), ""
-			if !t.Exact {
+	for _, r := range Rows(tl) {
+		switch r.Kind {
+		case RowStart:
+			fmt.Fprintf(w, "%s  %-7s %s\n", stamp(r.At), r.Kind, text(r))
+		case RowAgent:
+			dur, note := Dur(r.D), ""
+			if r.Approx {
 				dur = "~" + dur
 			}
-			if t.Running && j == len(t.Segments)-1 {
+			if r.Running {
 				note = "still running"
 			}
-			row(seg.Start, p.agent, "agent", dur, bar(seg.D, scale, '█'), note)
-			for len(ait) > 0 && (j == len(t.Segments)-1 || ait[0].At.Before(seg.Start.Add(seg.D))) {
-				ev := ait[0]
-				row(ev.At, p.ait, "", "", "◆ ait "+ev.Action+" "+ev.ID, "")
-				ait = ait[1:]
+			timed(r, p.agent, dur, bar(r.D, scale, '█'), note)
+		case RowWaiting:
+			timed(r, p.you, Dur(r.D), bar(r.D, scale, '░'), ">> "+text(r))
+		case RowClaimed, RowClosed:
+			note := ""
+			if r.Issue != nil {
+				note = fmt.Sprintf("agent %s of %s", Dur(r.Issue.Active), Dur(r.Issue.Wall))
 			}
-		}
-		if i+1 < len(tl.Turns) {
-			next := tl.Turns[i+1]
-			row(time.Time{}, p.you, "waiting", Dur(next.GapBefore), bar(next.GapBefore, scale, '░'), ">> "+said(next))
+			fmt.Fprintf(w, "%s  %s%-7s %s%s  %s\n", stamp(r.At), p.ait, r.Kind, r.Text, p.reset, note)
 		}
 	}
 

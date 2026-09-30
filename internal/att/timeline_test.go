@@ -131,3 +131,36 @@ func TestDur(t *testing.T) {
 		}
 	}
 }
+
+func TestRows(t *testing.T) {
+	tl, err := Build(strings.NewReader(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := Rows(tl)
+
+	var kinds []string
+	for _, r := range rows {
+		kinds = append(kinds, r.Kind)
+	}
+	want := "start agent waiting agent waiting agent claimed waiting agent closed"
+	if got := strings.Join(kinds, " "); got != want {
+		t.Fatalf("kinds = %s\nwant    %s", got, want)
+	}
+
+	t.Run("the wait between turns ends with your next message", func(t *testing.T) {
+		if r := rows[4]; !r.Message || r.Text != "Go ahead" || r.D != 2*time.Minute {
+			t.Errorf("row = %+v", r)
+		}
+	})
+	t.Run("a mid-turn wait carries its reason, not a message", func(t *testing.T) {
+		if r := rows[7]; r.Message || r.Text != "approving: ls /secret" {
+			t.Errorf("row = %+v", r)
+		}
+	})
+	t.Run("the close row carries the issue's totals", func(t *testing.T) {
+		if r := rows[9]; r.Issue == nil || r.Issue.Active != 100*time.Second {
+			t.Errorf("row = %+v", r)
+		}
+	})
+}
