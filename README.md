@@ -6,7 +6,7 @@ Shows how much of a Claude Code or Codex session the agent spent working, and ho
 
 ## What it does
 
-`att` reads the session logs Claude Code keeps under `~/.claude/projects/`, or Codex keeps under `~/.codex/sessions/`, and splits each session into stretches of agent work and stretches of waiting on the you.
+`att` reads the session logs Claude Code keeps under `~/.claude/projects/`, or Codex keeps under `~/.codex/sessions/`, and splits each session into stretches of agent work and stretches of waiting on you.
 
 If the project and agent uses [`ait`](https://github.com/ohnotnow/agent-issue-tracker) (a small issue tracker for coding agents) during the session, `att` spots the `ait claim` and `ait close` commands and marks them on the timeline.
 
