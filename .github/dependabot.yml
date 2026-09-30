@@ -1,0 +1,10 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    # Don't raise PRs for releases younger than this many days, to dodge a
+    # freshly-poisoned version that gets yanked within hours or days. 1 to 90.
+    cooldown:
+      default-days: 7
