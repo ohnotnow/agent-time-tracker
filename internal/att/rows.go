@@ -55,12 +55,16 @@ func Rows(tl Timeline) []Row {
 	rows := []Row{{Kind: RowStart, At: tl.Turns[0].Start, Text: tl.Turns[0].Prompt, Message: true}}
 	for i, t := range tl.Turns {
 		ait := t.Ait
+		lastWork := len(t.Segments) - 1
+		for lastWork > 0 && t.Segments[lastWork].Wait {
+			lastWork--
+		}
 		for j, seg := range t.Segments {
 			if seg.Wait {
 				rows = append(rows, Row{Kind: RowWaiting, D: seg.D, Text: seg.Label})
 				continue
 			}
-			last := j == len(t.Segments)-1
+			last := j == lastWork
 			rows = append(rows, Row{Kind: RowAgent, At: seg.Start, D: seg.D, Approx: !t.Exact, Running: t.Running && last})
 			for len(ait) > 0 && (last || ait[0].At.Before(seg.Start.Add(seg.D))) {
 				ev := ait[0]

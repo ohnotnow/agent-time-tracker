@@ -9,8 +9,6 @@ import (
 	"hash/fnv"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/ohnotnow/agent-time-tracker/internal/att"
@@ -65,20 +63,14 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, err := os.Open(path)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err)
-		return
-	}
-	defer f.Close()
-	tl, err := att.Build(f)
+	tl, err := att.Load(path)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(payload(s.Project, path, tl))
+	json.NewEncoder(w).Encode(payload(s.Project, tl))
 }
 
 type apiTotal struct {
@@ -111,6 +103,7 @@ type apiRow struct {
 
 type apiTimeline struct {
 	Project string `json:"project"`
+	Agent   string `json:"agent"`
 	Session string `json:"session"`
 	Totals  struct {
 		Agent   apiTotal `json:"agent"`
@@ -131,10 +124,8 @@ func issue(is att.Issue) apiIssue {
 	return out
 }
 
-func payload(project, path string, tl att.Timeline) apiTimeline {
-	out := apiTimeline{Project: project, Rows: []apiRow{}, Issues: []apiIssue{}}
-	id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	out.Session = id[:min(8, len(id))]
+func payload(project string, tl att.Timeline) apiTimeline {
+	out := apiTimeline{Project: project, Agent: tl.Agent, Session: tl.ShortID(), Rows: []apiRow{}, Issues: []apiIssue{}}
 
 	active, blocked, between, wall := tl.Totals()
 	out.Totals.Agent = total(active)

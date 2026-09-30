@@ -1,5 +1,5 @@
-// Command att shows how much of a Claude Code session the agent spent
-// working and how much it spent waiting on you.
+// Command att shows how much of a Claude Code or Codex session the agent
+// spent working and how much it spent waiting on you.
 package main
 
 import (
@@ -30,7 +30,7 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("att", flag.ContinueOnError)
 	follow := fs.Bool("follow", false, "keep watching, redrawing whenever the session log changes")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: att [--follow] [session.jsonl | project-dir]\n       att serve [--listen addr] [session.jsonl | project-dir]\n\nWith no session or directory, reads the latest Claude Code session for the current directory.")
+		fmt.Fprintln(fs.Output(), "Usage: att [--follow] [session.jsonl | project-dir]\n       att serve [--listen addr] [session.jsonl | project-dir]\n\nWith no session or directory, reads the latest Claude Code or Codex session for the current directory.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -101,24 +101,18 @@ func serve(args []string) error {
 
 // show builds the timeline for one session log and draws it.
 func show(path string, colour bool, suffix string) error {
-	f, err := os.Open(path)
+	tl, err := att.Load(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-
-	tl, err := att.Build(f)
-	if err != nil {
-		return err
-	}
-	id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	title := "session " + id[:min(8, len(id))] + suffix
+	title := tl.Agent + " session " + tl.ShortID() + suffix
 	att.Render(os.Stdout, tl, title, colour)
 	return nil
 }
 
 // sessionPath resolves the argument to a session log: a .jsonl file is used
-// as is, a directory (default: the current one) means its latest session.
+// as is, a directory (default: the current one) means its latest session
+// from either agent.
 func sessionPath(arg string) (string, error) {
 	if strings.HasSuffix(arg, ".jsonl") {
 		return arg, nil
@@ -126,11 +120,7 @@ func sessionPath(arg string) (string, error) {
 	if arg == "" {
 		arg = "."
 	}
-	dir, err := att.ProjectLogDir(arg)
-	if err != nil {
-		return "", err
-	}
-	return att.LatestSession(dir)
+	return att.FindSession(arg)
 }
 
 func useColour() bool {

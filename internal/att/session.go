@@ -13,101 +13,58 @@ import (
 	"time"
 )
 
-// entry is the subset of a Claude Code session log line we care about. The
-// log format is Claude Code's internal one, not a documented interface, so
-// everything that reads it lives in this file.
-type entry struct {
-	Type        string    `json:"type"`
-	Subtype     string    `json:"subtype"`
-	Timestamp   time.Time `json:"timestamp"`
-	DurationMs  int64     `json:"durationMs"`
-	IsSidechain bool      `json:"isSidechain"`
-	IsMeta      bool      `json:"isMeta"`
-	Origin      *struct {
-		Kind string `json:"kind"`
-	} `json:"origin"`
-	Message struct {
-		Content json.RawMessage `json:"content"`
-	} `json:"message"`
-}
+// Session logs come from Claude Code (claude.go) or Codex (codex.go). Each
+// reader turns its log into turns; everything after that is shared.
 
-type block struct {
-	Type      string `json:"type"`
-	Text      string `json:"text"`
-	ID        string `json:"id"`
-	ToolUseID string `json:"tool_use_id"`
-	Name      string `json:"name"`
-	Input     struct {
-		Command string `json:"command"`
-	} `json:"input"`
-}
-
-// summary names a tool call for the timeline: the command for Bash, the
-// tool's name otherwise.
-func (b block) summary() string {
-	if b.Name == "Bash" && b.Input.Command != "" {
-		return b.Input.Command
+// Load builds the timeline for the session log at path.
+func Load(path string) (Timeline, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Timeline{}, err
 	}
-	return b.Name
-}
-
-// text returns the message's text: the content itself when it is a plain
-// string, or its text parts joined when it is a list (a message with an
-// image attached, say).
-func (e entry) text() (string, bool) {
-	var s string
-	if err := json.Unmarshal(e.Message.Content, &s); err == nil {
-		return s, true
+	defer f.Close()
+	tl, err := Build(f)
+	if tl.ID == "" {
+		tl.ID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}
-	var parts []string
-	for _, b := range e.blocks() {
-		if b.Type == "text" {
-			parts = append(parts, b.Text)
-		}
+	return tl, err
+}
+
+func Build(r io.Reader) (Timeline, error) {
+	lines, err := readLines(r)
+	if err != nil {
+		return Timeline{}, err
 	}
-	return strings.Join(parts, " "), len(parts) > 0
-}
-
-func (e entry) blocks() []block {
-	var bs []block
-	_ = json.Unmarshal(e.Message.Content, &bs)
-	return bs
-}
-
-func (e entry) isToolResult() bool {
-	bs := e.blocks()
-	return len(bs) > 0 && bs[0].Type == "tool_result"
-}
-
-func (e entry) isHumanPrompt() bool {
-	return e.Origin != nil && e.Origin.Kind == "human"
-}
-
-// bashCommands returns the commands of any Bash tool calls in an assistant entry.
-func (e entry) bashCommands() []string {
-	var cmds []string
-	for _, b := range e.blocks() {
-		if b.Type == "tool_use" && b.Name == "Bash" {
-			cmds = append(cmds, b.Input.Command)
-		}
+	var tl Timeline
+	if isCodex(lines) {
+		tl.Agent = "Codex"
+		tl.ID, tl.Turns = codexTurns(lines)
+	} else {
+		tl.Agent = "Claude Code"
+		tl.Turns = claudeTurns(lines)
 	}
-	return cmds
+	for i := range tl.Turns {
+		tl.Turns[i].segment()
+	}
+	tl.Issues = issues(tl.Turns)
+	return tl, nil
 }
 
-// aitCall matches "ait claim <id>" and "ait close <id>". Real ids always
-// contain a hyphen (prefix-XXXXX), which keeps "ait close --help" out.
-var aitCall = regexp.MustCompile(`\bait\s+(claim|close)\s+([A-Za-z0-9]+-[A-Za-z0-9.]+)`)
+// isCodex reports whether a log is Codex's: its first line is session_meta.
+func isCodex(lines [][]byte) bool {
+	var l codexLine
+	return len(lines) > 0 && json.Unmarshal(lines[0], &l) == nil && l.isSessionMeta()
+}
 
-func readEntries(r io.Reader) ([]entry, error) {
-	var out []entry
+// readLines returns the log's non-blank lines. A line still being written
+// is included and simply fails to parse until it is finished.
+func readLines(r io.Reader) ([][]byte, error) {
+	var out [][]byte
 	br := bufio.NewReader(r)
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(strings.TrimSpace(string(line))) > 0 {
-			var e entry
-			if jerr := json.Unmarshal(line, &e); jerr == nil {
-				out = append(out, e)
-			}
+			out = append(out, line)
 		}
 		if errors.Is(err, io.EOF) {
 			return out, nil
@@ -118,9 +75,24 @@ func readEntries(r io.Reader) ([]entry, error) {
 	}
 }
 
-// ProjectLogDir is where Claude Code keeps session logs for a project
-// directory: every non-alphanumeric character of the absolute path becomes '-'.
-func ProjectLogDir(projectDir string) (string, error) {
+// aitCall matches "ait claim <id>" and "ait close <id>" where a shell command
+// starts: a line's start, or after &&, ||, ; or |. That keeps out mentions
+// inside quotes, such as a script searching a log for them. Real ids always
+// contain a hyphen (prefix-XXXXX), which keeps "ait close --help" out.
+var aitCall = regexp.MustCompile(`(?m)(?:^|&&|\|\||[;|])\s*ait\s+(claim|close)\s+([A-Za-z0-9]+-[A-Za-z0-9.]+)`)
+
+// aitEvents finds every ait claim and close in a shell command.
+func aitEvents(cmd string, at time.Time) []AitEvent {
+	var evs []AitEvent
+	for _, m := range aitCall.FindAllStringSubmatch(cmd, -1) {
+		evs = append(evs, AitEvent{At: at, Action: m[1], ID: m[2]})
+	}
+	return evs
+}
+
+// FindSession returns the newest session log for a project directory,
+// whichever agent wrote it.
+func FindSession(projectDir string) (string, error) {
 	abs, err := filepath.Abs(projectDir)
 	if err != nil {
 		return "", err
@@ -129,29 +101,12 @@ func ProjectLogDir(projectDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(abs, "-")
-	return filepath.Join(home, ".claude", "projects", name), nil
-}
-
-// LatestSession returns the most recently modified session log in dir.
-func LatestSession(dir string) (string, error) {
-	matches, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
-	if err != nil {
-		return "", err
+	claude, mod := latestClaude(home, abs)
+	if codex := latestCodex(home, abs, mod); codex != "" {
+		return codex, nil
 	}
-	var best string
-	var bestMod time.Time
-	for _, m := range matches {
-		info, err := os.Stat(m)
-		if err != nil {
-			continue
-		}
-		if info.ModTime().After(bestMod) {
-			best, bestMod = m, info.ModTime()
-		}
+	if claude == "" {
+		return "", fmt.Errorf("no Claude Code or Codex sessions for %s", abs)
 	}
-	if best == "" {
-		return "", fmt.Errorf("no session logs in %s", dir)
-	}
-	return best, nil
+	return claude, nil
 }

@@ -1,12 +1,12 @@
 # agent-time-tracker
 
-Shows how much of a Claude Code session the agent spent working, and how much it spent waiting on you.
+Shows how much of a Claude Code or Codex session the agent spent working, and how much it spent waiting on you.
 
 ![The att web UI](screenshot.png)
 
 ## What it does
 
-`att` reads the session logs Claude Code keeps under `~/.claude/projects/` and splits each session into stretches of agent work and stretches of waiting on the you.
+`att` reads the session logs Claude Code keeps under `~/.claude/projects/`, or Codex keeps under `~/.codex/sessions/`, and splits each session into stretches of agent work and stretches of waiting on the you.
 
 If the project and agent uses [`ait`](https://github.com/ohnotnow/agent-issue-tracker) (a small issue tracker for coding agents) during the session, `att` spots the `ait claim` and `ait close` commands and marks them on the timeline.
 
@@ -19,7 +19,7 @@ There are three ways to view a session:
 ## Prerequisites
 
 - Go 1.27 or later, if you are building from source
-- Claude Code
+- Claude Code or Codex
 
 ## Getting started
 
@@ -39,7 +39,7 @@ go build -o att ./cmd/att
 
 ## Usage
 
-Run `att` from a project directory to see that project's most recent Claude Code session:
+Run `att` from a project directory to see that project's most recent session, from whichever agent you used last:
 
 ```bash
 att
@@ -73,7 +73,7 @@ Colour output is turned off when stdout is not a terminal, or when `NO_COLOR` is
 
 ## A note on the log format
 
-Claude Code's session logs are an internal format, not a documented interface, so a Claude Code update could break things. The details of how `att` reads the log are in [TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md).
+Claude Code's and Codex's session logs are internal formats, not documented interfaces, so an update to either could break things. Codex does not log when it is waiting for you to approve a command, so for Codex sessions any such wait counts as agent work, and agent times are marked approximate (`~`). The details of how `att` reads the log are in [TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md).
 
 ## Contributing
 

@@ -309,7 +309,7 @@
     function draw(data) {
       $('project').textContent = data.project;
       const first = data.rows.find((r) => r.at);
-      $('session').textContent = 'session ' + data.session + (first ? ' · ' + day(first.at) : '');
+      $('session').textContent = data.agent + ' session ' + data.session + (first ? ' · ' + day(first.at) : '');
 
       const t = data.totals;
       $('t-agent').textContent = t.agent.dur;

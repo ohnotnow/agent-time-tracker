@@ -120,6 +120,37 @@ func TestBuildWithoutTurnDurationFallsBackToWallClock(t *testing.T) {
 	}
 }
 
+// A 60s turn where turn_duration says 30s of work, with no slow tool call to
+// pin the other 30s on. The claim comes after the last 30s of wall clock.
+func TestBlockedTimeNotMatchedToAToolCallComesOutOfTheWork(t *testing.T) {
+	const log = `
+{"type":"user","timestamp":"2026-09-30T10:00:00Z","origin":{"kind":"human"},"message":{"content":"hi"}}
+{"type":"assistant","timestamp":"2026-09-30T10:00:50Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ait claim demo-AbCdE.1 claude"}}]}}
+{"type":"user","timestamp":"2026-09-30T10:00:51Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}
+{"type":"system","subtype":"turn_duration","durationMs":30000,"timestamp":"2026-09-30T10:01:00Z"}
+`
+	tl, err := Build(strings.NewReader(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("work plus waits add up to the turn", func(t *testing.T) {
+		want := []seg{{30 * time.Second, false, ""}, {30 * time.Second, true, "waiting on you (not matched to a tool call)"}}
+		if got := segs(tl.Turns[0]); !equalSegs(got, want) {
+			t.Errorf("segments = %+v, want %+v", got, want)
+		}
+	})
+	t.Run("an ait event after the trimmed work still gets a row", func(t *testing.T) {
+		var kinds []string
+		for _, r := range Rows(tl) {
+			kinds = append(kinds, r.Kind)
+		}
+		if got, want := strings.Join(kinds, " "), "start agent claimed waiting"; got != want {
+			t.Errorf("kinds = %s, want %s", got, want)
+		}
+	})
+}
+
 func TestDur(t *testing.T) {
 	for d, want := range map[time.Duration]string{
 		13 * time.Second:                "13s",

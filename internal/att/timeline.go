@@ -1,7 +1,6 @@
 package att
 
 import (
-	"io"
 	"sort"
 	"strings"
 	"time"
@@ -13,8 +12,9 @@ type Turn struct {
 	// Active is Claude Code's own turn_duration, which already leaves out
 	// time spent on question dialogs and permission prompts.
 	Active time.Duration
-	// Exact is false when the log had no turn_duration and Active is the
-	// wall clock instead.
+	// Exact is false when the log had no such figure (a Claude Code turn
+	// with no turn_duration, or any Codex turn) and Active is the wall clock
+	// less any waits found.
 	Exact bool
 	// Running is true for a turn still in progress at the end of the log.
 	Running bool
@@ -112,12 +112,35 @@ func (t *Turn) segment() {
 	if d := t.End.Sub(cursor); d > 0 || len(t.Segments) == 0 {
 		t.Segments = append(t.Segments, Segment{Start: cursor, D: max(d, 0)})
 	}
-	if budget > minWait {
-		t.Segments = append(t.Segments, Segment{Start: t.End, D: budget, Wait: true, Label: "waiting on you (not matched to a tool call)"})
+	if t.Exact {
+		if left := t.End.Sub(t.Start) - t.Active - t.BlockedWait(); left > minWait {
+			t.trimWork(left)
+			t.Segments = append(t.Segments, Segment{Start: t.End.Add(-left), D: left, Wait: true, Label: "waiting on you (not matched to a tool call)"})
+		}
 	}
 	if !t.Exact {
 		t.Active = t.End.Sub(t.Start) - t.BlockedWait()
 	}
+}
+
+// trimWork takes d off the turn's work, latest first, for blocked time that
+// happened somewhere in the turn but matched no tool call. Work trimmed to
+// nothing is dropped.
+func (t *Turn) trimWork(d time.Duration) {
+	kept := t.Segments[:0]
+	for i := len(t.Segments) - 1; i >= 0; i-- {
+		if s := &t.Segments[i]; !s.Wait {
+			cut := min(s.D, d)
+			s.D -= cut
+			d -= cut
+		}
+	}
+	for _, s := range t.Segments {
+		if s.Wait || s.D > 0 {
+			kept = append(kept, s)
+		}
+	}
+	t.Segments = kept
 }
 
 type AitEvent struct {
@@ -135,9 +158,14 @@ type Issue struct {
 }
 
 type Timeline struct {
-	Turns  []Turn
-	Issues []Issue
+	// Agent names the tool that wrote the log, and ID is the session's id.
+	Agent, ID string
+	Turns     []Turn
+	Issues    []Issue
 }
+
+// ShortID is the start of the session id, enough to tell sessions apart.
+func (tl Timeline) ShortID() string { return tl.ID[:min(8, len(tl.ID))] }
 
 func (tl Timeline) Totals() (active, blocked, between, wall time.Duration) {
 	for _, t := range tl.Turns {
@@ -149,103 +177,6 @@ func (tl Timeline) Totals() (active, blocked, between, wall time.Duration) {
 		wall = tl.Turns[n-1].End.Sub(tl.Turns[0].Start)
 	}
 	return
-}
-
-func Build(r io.Reader) (Timeline, error) {
-	entries, err := readEntries(r)
-	if err != nil {
-		return Timeline{}, err
-	}
-
-	var turns []Turn
-	var cur *Turn
-	var lastEnd, pending time.Time
-
-	open := func(at time.Time) {
-		cur = &Turn{Start: at}
-		if !lastEnd.IsZero() {
-			cur.GapBefore = at.Sub(lastEnd)
-		}
-		pending = time.Time{}
-	}
-	closeTurn := func(at time.Time) {
-		cur.End = at
-		cur.segment()
-		turns = append(turns, *cur)
-		lastEnd = at
-		cur = nil
-	}
-
-	for _, e := range entries {
-		if e.IsSidechain || e.Timestamp.IsZero() {
-			continue
-		}
-		switch {
-		case e.Type == "user" && e.isToolResult() && cur != nil:
-			for _, b := range e.blocks() {
-				for i := range cur.tools {
-					if cur.tools[i].id == b.ToolUseID && cur.tools[i].done.IsZero() {
-						cur.tools[i].done = e.Timestamp
-					}
-				}
-			}
-		case e.Type == "user" && e.isHumanPrompt():
-			if cur == nil {
-				open(e.Timestamp)
-			}
-			if s, ok := e.text(); ok && cur.Prompt == "" {
-				cur.Prompt = s
-			}
-		case e.Type == "user" && !e.IsMeta && !e.isToolResult() && cur == nil && pending.IsZero():
-			// A slash command or similar: only starts a turn if the agent
-			// then does something.
-			pending = e.Timestamp
-		case e.Type == "assistant":
-			if cur == nil {
-				if pending.IsZero() {
-					continue
-				}
-				open(pending)
-			}
-			cur.End = e.Timestamp
-			for _, b := range e.blocks() {
-				if b.Type == "tool_use" {
-					cur.tools = append(cur.tools, toolCall{id: b.ID, name: b.Name, summary: b.summary(), at: e.Timestamp})
-				}
-			}
-			for _, cmd := range e.bashCommands() {
-				for _, m := range aitCall.FindAllStringSubmatch(cmd, -1) {
-					cur.Ait = append(cur.Ait, AitEvent{At: e.Timestamp, Action: m[1], ID: m[2]})
-				}
-			}
-		case e.Type == "system" && e.Subtype == "stop_hook_summary" && cur != nil:
-			// Stop hooks fire as the turn ends; turn_duration, if any, follows
-			// and redoes the split with the exact figure.
-			cur.Active, cur.Exact = e.Timestamp.Sub(cur.Start), false
-			closeTurn(e.Timestamp)
-		case e.Type == "system" && e.Subtype == "turn_duration":
-			d := time.Duration(e.DurationMs) * time.Millisecond
-			if cur != nil {
-				cur.Active, cur.Exact = d, true
-				closeTurn(e.Timestamp)
-			} else if n := len(turns); n > 0 && !turns[n-1].Exact {
-				last := &turns[n-1]
-				last.Active, last.Exact, last.Segments = d, true, nil
-				last.segment()
-			}
-		}
-	}
-	if cur != nil {
-		cur.Running = true
-		if cur.End.IsZero() {
-			cur.End = cur.Start
-		}
-		cur.Active = cur.End.Sub(cur.Start)
-		cur.segment()
-		turns = append(turns, *cur)
-	}
-
-	return Timeline{Turns: turns, Issues: issues(turns)}, nil
 }
 
 // issues credits each claimed issue with the active time of every turn from
