@@ -1,6 +1,9 @@
 package att
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // Row kinds, in the order a session reads.
 const (
@@ -20,6 +23,11 @@ type Row struct {
 	// row before.
 	At time.Time
 	D  time.Duration
+	// Scale is the bar length for agent and waiting rows, 0 to 1: a
+	// square-root scale against the session's longest stretch, so long waits
+	// still clearly dominate, short bursts of work stay visible, and nothing
+	// is capped.
+	Scale float64
 	// Text is the message for start rows and for waits that your message
 	// ended (Message is true then), the reason for other waits, and the
 	// issue id for ait rows.
@@ -72,5 +80,24 @@ func Rows(tl Timeline) []Row {
 			rows = append(rows, Row{Kind: RowWaiting, D: next.GapBefore, Text: next.Prompt, Message: true})
 		}
 	}
+	l := longest(tl.Turns)
+	for i := range rows {
+		if rows[i].Kind == RowAgent || rows[i].Kind == RowWaiting {
+			rows[i].Scale = math.Sqrt(rows[i].D.Seconds() / l.Seconds())
+		}
+	}
 	return rows
+}
+
+// longest is the longest stretch of any kind in the session, which gets the
+// full bar.
+func longest(turns []Turn) time.Duration {
+	l := time.Second
+	for _, t := range turns {
+		l = max(l, t.GapBefore)
+		for _, s := range t.Segments {
+			l = max(l, s.D)
+		}
+	}
+	return l
 }

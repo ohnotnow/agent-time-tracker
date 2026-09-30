@@ -27,7 +27,6 @@ func Render(w io.Writer, tl Timeline, title string, colour bool) {
 		return
 	}
 
-	scale := longest(tl.Turns)
 	fmt.Fprintf(w, "%s%s  -  %s%s\n\n", p.dim, title, tl.Turns[0].Start.Local().Format("Mon 2 Jan 2006"), p.reset)
 
 	stamp := func(at time.Time) string {
@@ -61,9 +60,9 @@ func Render(w io.Writer, tl Timeline, title string, colour bool) {
 			if r.Running {
 				note = "still running"
 			}
-			timed(r, p.agent, dur, bar(r.D, scale, '█'), note)
+			timed(r, p.agent, dur, bar(r.Scale, '█'), note)
 		case RowWaiting:
-			timed(r, p.you, Dur(r.D), bar(r.D, scale, '░'), ">> "+text(r))
+			timed(r, p.you, Dur(r.D), bar(r.Scale, '░'), ">> "+text(r))
 		case RowClaimed, RowClosed:
 			note := ""
 			if r.Issue != nil {
@@ -96,33 +95,20 @@ func Render(w io.Writer, tl Timeline, title string, colour bool) {
 	}
 }
 
-// longest is the longest stretch of any kind in the session, which fills the
-// full bar width.
-func longest(turns []Turn) time.Duration {
-	l := time.Second
-	for _, t := range turns {
-		l = max(l, t.GapBefore)
-		for _, s := range t.Segments {
-			l = max(l, s.D)
-		}
-	}
-	return l
-}
-
-// bar draws d on a square-root scale against the session's longest stretch:
-// long waits still clearly dominate, short bursts of work stay visible, and
-// nothing is capped. The exact figure sits next to it.
-func bar(d, longest time.Duration, ch rune) string {
-	frac := math.Sqrt(d.Seconds() / longest.Seconds())
-	n := min(max(int(math.Ceil(frac*barWidth)), 1), barWidth)
+// bar draws a row's Scale as a run of ch, padded to the full width.
+func bar(scale float64, ch rune) string {
+	n := min(max(int(math.Ceil(scale*barWidth)), 1), barWidth)
 	return strings.Repeat(string(ch), n) + strings.Repeat(" ", barWidth-n)
 }
 
-func snippet(s string) string {
+func snippet(s string) string { return Snippet(s, 50) }
+
+// Snippet flattens s onto one line and cuts it to n characters.
+func Snippet(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	r := []rune(s)
-	if len(r) > 50 {
-		return string(r[:49]) + "…"
+	if len(r) > n {
+		return string(r[:n-1]) + "…"
 	}
 	return s
 }

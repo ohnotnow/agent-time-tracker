@@ -3,14 +3,17 @@
 package main
 
 import (
+	"cmp"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ohnotnow/agent-time-tracker/internal/att"
+	"github.com/ohnotnow/agent-time-tracker/internal/web"
 )
 
 func main() {
@@ -21,10 +24,13 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "serve" {
+		return serve(args[1:])
+	}
 	fs := flag.NewFlagSet("att", flag.ContinueOnError)
 	follow := fs.Bool("follow", false, "keep watching, redrawing whenever the session log changes")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: att [--follow] [session.jsonl | project-dir]\n\nWith no argument, reads the latest Claude Code session for the current directory.")
+		fmt.Fprintln(fs.Output(), "Usage: att [--follow] [session.jsonl | project-dir]\n       att serve [--listen addr] [session.jsonl | project-dir]\n\nWith no session or directory, reads the latest Claude Code session for the current directory.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -65,6 +71,32 @@ func run(args []string) error {
 			return err
 		}
 	}
+}
+
+// serve runs the live web page for a session or directory.
+func serve(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	listen := fs.String("listen", "127.0.0.1:8080", "address to listen on; the page shows your messages, so it stays on localhost unless you say otherwise")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	arg := fs.Arg(0)
+	if _, err := sessionPath(arg); err != nil {
+		return err
+	}
+
+	project := filepath.Base(arg)
+	if !strings.HasSuffix(arg, ".jsonl") {
+		abs, err := filepath.Abs(cmp.Or(arg, "."))
+		if err != nil {
+			return err
+		}
+		project = filepath.Base(abs)
+	}
+
+	srv := &web.Server{Project: project, Resolve: func() (string, error) { return sessionPath(arg) }}
+	fmt.Printf("Serving %s on http://%s - Ctrl-C to stop\n", project, *listen)
+	return http.ListenAndServe(*listen, srv)
 }
 
 // show builds the timeline for one session log and draws it.

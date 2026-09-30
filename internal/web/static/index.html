@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Time</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&family=Oswald:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    /* Palette and fonts copied from web-ait, so the two read as siblings. */
+    :root {
+      --lc-bg:      #07080d;
+      --lc-bg-2:    #0e1220;
+      --lc-surface: #101527;
+      --lc-ink:     #ffe8c2;
+      --lc-dim:     #7a7d8a;
+      --lc-line:    #1f2338;
+      --lc-cyan:    #39e3ff;
+      --lc-amber:   #ffb02e;
+      --lc-red:     #ff4d6d;
+      --lc-green:   #3ee08a;
+      --lc-purple:  #c78bff;
+      --lc-chip-ink: #0a0a12;
+      --elbow: 2.25rem;
+      --track: 20rem;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --lc-bg:      #f4ece0;
+        --lc-bg-2:    #ede2cf;
+        --lc-surface: #ffffff;
+        --lc-ink:     #2a2320;
+        --lc-dim:     #7a6c55;
+        --lc-line:    #d8c9ae;
+        --lc-chip-ink: #1a120a;
+        --lc-cyan:    #0a90b8;
+        --lc-amber:   #d98824;
+        --lc-red:     #c43a55;
+        --lc-green:   #2e8b4a;
+        --lc-purple:  #8a52c4;
+      }
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+      font-size: 1rem;
+      background: var(--lc-bg);
+      color: var(--lc-ink);
+      min-height: 100vh;
+    }
+
+    /* CRT scanlines, as web-ait */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+      background-image: repeating-linear-gradient(0deg,
+        rgba(0,0,0,0.22) 0, rgba(0,0,0,0.22) 1px, transparent 1px, transparent 3px);
+      opacity: 0.35;
+      mix-blend-mode: multiply;
+    }
+    @media (prefers-color-scheme: light) { body::before { opacity: 0.12; } }
+
+    .condensed {
+      font-family: 'Barlow Condensed', 'Oswald', sans-serif;
+      text-transform: uppercase;
+    }
+
+    /* ── Top bar: brand elbow + stat pills ── */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: var(--lc-bg);
+      padding: 0.75rem 1rem 0;
+    }
+    .top { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+
+    .brand {
+      position: relative;
+      background: var(--lc-amber);
+      color: var(--lc-chip-ink);
+      border-radius: var(--elbow) 0.5rem 0.5rem var(--elbow);
+      padding: 0.7rem 1.6rem 0.7rem 1.8rem;
+      min-width: 13rem;
+      line-height: 1.15;
+    }
+    .brand h1 { font-size: 1.9rem; font-weight: 800; letter-spacing: 0.12em; line-height: 1; }
+    .brand .sub { font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.8; }
+
+    .dot {
+      position: absolute; top: 0.6rem; right: 0.8rem;
+      width: 0.55rem; height: 0.55rem; border-radius: 50%;
+      background: var(--lc-green); box-shadow: 0 0 6px var(--lc-green);
+    }
+    .dot.lost { background: var(--lc-red); box-shadow: 0 0 6px var(--lc-red); animation: blink 1s ease-in-out infinite; }
+    @keyframes blink { 50% { opacity: 0.25; } }
+
+    .pill {
+      flex: 1 1 9rem;
+      display: flex; flex-direction: column; justify-content: center;
+      padding: 0.45rem 1rem;
+      border-radius: 0.75rem;
+      color: var(--lc-chip-ink);
+      font-family: 'Barlow Condensed', 'Oswald', sans-serif;
+      min-width: 0;
+    }
+    .pill .num { font-size: 2rem; font-weight: 800; line-height: 1; letter-spacing: -0.01em; }
+    .pill .lbl { font-size: 0.85rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+    .pill.agent  { background: var(--lc-green); }
+    .pill.wait   { background: var(--lc-amber); }
+    .pill.wall   { background: var(--lc-cyan); }
+    .pill.issues { background: var(--lc-purple); }
+
+    /* Agent-vs-waiting share of the wall clock */
+    .strip {
+      display: flex; height: 0.3rem; margin: 0.6rem 0 0;
+      border-radius: 2px; overflow: hidden; background: var(--lc-bg-2);
+    }
+    .strip .a { background: var(--lc-green); }
+    .strip .w { background: var(--lc-amber); opacity: 0.55; }
+    .rule { height: 2px; background: var(--lc-amber); margin-top: 0.3rem; }
+
+    /* ── The stream ── */
+    main { padding: 0.75rem 1rem 3rem; }
+
+    ol.stream { list-style: none; }
+
+    .row {
+      display: grid;
+      grid-template-columns: 5.5rem 6.5rem 5rem var(--track) 1fr;
+      align-items: center;
+      gap: 0 0.75rem;
+      min-height: 1.9rem;
+      padding: 0.15rem 0;
+      border-left: 0.9rem solid transparent;
+      padding-left: 0.75rem;
+    }
+    .row .at   { color: var(--lc-dim); font-size: 0.85rem; }
+    .row .kind { font-size: 1.05rem; font-weight: 700; letter-spacing: 0.1em; }
+    .row .dur  { font-weight: 700; }
+    .row .note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* LCARS rail down the left: green while working, amber while waiting */
+    .row.agent   { border-left-color: var(--lc-green); }
+    .row.waiting { border-left-color: color-mix(in srgb, var(--lc-amber) 45%, transparent); }
+    .row.start   { border-left-color: var(--lc-amber); border-bottom-left-radius: 0.9rem; margin-bottom: 0.25rem; }
+    .row.claimed, .row.closed { border-left-color: var(--lc-cyan); }
+
+    .row.agent .kind   { color: var(--lc-green); }
+    .row.waiting .kind { color: var(--lc-amber); }
+    .row.start .kind   { color: var(--lc-amber); }
+
+    .track, .bar { display: block; }
+    .bar { height: 1.05rem; border-radius: 999px; min-width: 0.6rem; }
+    .row.agent .bar { background: var(--lc-green); }
+    .row.agent.running .bar { animation: pulse 1.6s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: 0.45; } }
+    .row.waiting .bar {
+      background:
+        repeating-linear-gradient(90deg, transparent 0 3px, rgba(0,0,0,0.35) 3px 4px),
+        color-mix(in srgb, var(--lc-amber) 55%, transparent);
+    }
+
+    .row.waiting .note::before { content: "▸ "; color: var(--lc-amber); }
+    .row.waiting .note.reason { color: var(--lc-amber); }
+    .quote::before { content: "\201C"; }
+    .quote::after  { content: "\201D"; }
+    .dim { color: var(--lc-dim); }
+
+    .chip {
+      display: inline-block;
+      background: var(--lc-cyan); color: var(--lc-chip-ink);
+      font-family: 'Barlow Condensed', 'Oswald', sans-serif;
+      font-weight: 800; letter-spacing: 0.06em;
+      padding: 0.05rem 0.6rem; border-radius: 999px; font-size: 0.95rem;
+    }
+    .row.claimed .kind, .row.closed .kind { color: var(--lc-cyan); }
+    .row .issue-id { grid-column: 3 / span 2; }
+
+    /* ── Issues panel ── */
+    .issues-panel { margin-bottom: 1.5rem; display: none; }
+    .issues-panel.has { display: block; }
+    .panel-head {
+      display: inline-block;
+      background: var(--lc-purple); color: var(--lc-chip-ink);
+      font-size: 1.3rem; font-weight: 800; letter-spacing: 0.14em;
+      padding: 0.2rem 1.4rem 0.2rem 1.1rem;
+      border-radius: 0.9rem 0.4rem 0.4rem 0;
+    }
+    .issues-panel table { border-collapse: collapse; margin-top: 0.4rem; border-left: 0.9rem solid var(--lc-purple); }
+    .issues-panel td, .issues-panel th { padding: 0.3rem 1.2rem 0.3rem 0.75rem; text-align: left; }
+    .issues-panel th { color: var(--lc-dim); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; }
+
+    .empty { color: var(--lc-dim); padding: 2rem 0; }
+
+    /* Narrow screens: the note drops under the bar */
+    @media (max-width: 60rem) {
+      :root { --track: 1fr; }
+      .row { grid-template-columns: 5rem 5.5rem 4.5rem 1fr; }
+      .row .note { grid-column: 2 / -1; }
+      .brand { flex-basis: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="top">
+      <div class="brand condensed">
+        <h1>Agent Time</h1>
+        <div class="sub" id="project">&nbsp;</div>
+        <div class="sub" id="session">&nbsp;</div>
+        <span class="dot" id="dot" role="img" aria-label="Live"></span>
+      </div>
+      <div class="pill agent"><span class="num" id="t-agent">-</span><span class="lbl">Agent working</span></div>
+      <div class="pill wait"><span class="num" id="t-wait">-</span><span class="lbl">Waiting on you</span></div>
+      <div class="pill wall"><span class="num" id="t-wall">-</span><span class="lbl">Wall clock</span></div>
+      <div class="pill issues"><span class="num" id="t-issues">0</span><span class="lbl" id="t-issues-lbl">Open issues</span></div>
+    </div>
+    <div class="strip" aria-hidden="true"><div class="a" id="s-agent"></div><div class="w" id="s-wait"></div></div>
+    <div class="rule"></div>
+  </header>
+
+  <main>
+    <section class="issues-panel" id="issues-panel" aria-labelledby="issues-head">
+      <h2 class="panel-head condensed" id="issues-head">Open issues</h2>
+      <table>
+        <thead><tr><th>Issue</th><th>Claimed</th><th>Agent so far</th></tr></thead>
+        <tbody id="issues"></tbody>
+      </table>
+    </section>
+
+    <ol class="stream" id="stream" aria-label="Session timeline"></ol>
+    <p class="empty" id="empty" hidden>No turns in this session yet.</p>
+
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const clock = (iso) => new Date(iso).toLocaleTimeString('en-GB', { hour12: false });
+    const day = (iso) => new Date(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+
+    // Build DOM with textContent only: log text is untrusted and never goes
+    // near innerHTML.
+    function el(tag, cls, text) {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
+
+    function note(r) {
+      if (r.message && r.text === '') return el('span', 'note dim', '(slash command)');
+      if (r.message) {
+        const n = el('span', 'note');
+        n.append(el('span', 'quote', r.text));
+        n.title = r.text;
+        return n;
+      }
+      const n = el('span', 'note reason', r.text);
+      n.title = r.text;
+      return n;
+    }
+
+    function row(r) {
+      const li = el('li', 'row ' + r.kind + (r.running ? ' running' : ''));
+      li.append(el('span', 'at', r.at ? clock(r.at) : ''));
+      li.append(el('span', 'kind condensed', r.kind));
+
+      switch (r.kind) {
+        case 'start':
+          li.append(el('span'), el('span'), note(r));
+          break;
+        case 'agent': {
+          li.append(el('span', 'dur', (r.approx ? '~' : '') + r.dur));
+          const track = el('span', 'track');
+          const bar = el('span', 'bar');
+          bar.style.width = (r.scale * 100).toFixed(1) + '%';
+          track.append(bar);
+          li.append(track, el('span', 'note dim', r.running ? 'still running' : ''));
+          break;
+        }
+        case 'waiting': {
+          li.append(el('span', 'dur', r.dur));
+          const track = el('span', 'track');
+          const bar = el('span', 'bar');
+          bar.style.width = (r.scale * 100).toFixed(1) + '%';
+          track.append(bar);
+          li.append(track, note(r));
+          break;
+        }
+        case 'claimed':
+        case 'closed': {
+          const id = el('span', 'issue-id');
+          id.append(el('span', 'chip', r.text));
+          li.append(id);
+          li.append(el('span', 'note dim', r.issue ? `agent ${r.issue.agent} of ${r.issue.wall}` : ''));
+          break;
+        }
+      }
+      return li;
+    }
+
+    function draw(data) {
+      $('project').textContent = data.project;
+      const first = data.rows.find((r) => r.at);
+      $('session').textContent = 'session ' + data.session + (first ? ' · ' + day(first.at) : '');
+
+      const t = data.totals;
+      $('t-agent').textContent = t.agent.dur;
+      $('t-wait').textContent = t.waiting.dur;
+      $('t-wall').textContent = t.wall.dur;
+      // Only open issues get the table: closed ones already carry their
+      // totals on their closed row in the stream.
+      const open = data.issues.filter((is) => !is.closed);
+      const done = data.issues.length - open.length;
+      $('t-issues').textContent = open.length;
+      $('t-issues-lbl').textContent = done ? `Open · ${done} done` : 'Open issues';
+
+      const span = t.agent.seconds + t.waiting.seconds || 1;
+      $('s-agent').style.width = (100 * t.agent.seconds / span) + '%';
+      $('s-wait').style.width = (100 * t.waiting.seconds / span) + '%';
+
+      // Newest first, so new rows appear at the top without any scrolling.
+      $('stream').replaceChildren(...data.rows.map(row).reverse());
+      $('empty').hidden = data.rows.length > 0;
+
+      $('issues').replaceChildren(...open.map((is) => {
+        const tr = el('tr');
+        const id = el('td');
+        id.append(el('span', 'chip', is.id));
+        tr.append(id, el('td', '', clock(is.claimed)), el('td', '', is.agent));
+        return tr;
+      }));
+      $('issues-panel').classList.toggle('has', open.length > 0);
+
+    }
+
+    let etag = null;
+
+    // Poll cheaply: the server answers 304 until the session log changes.
+    async function poll() {
+      try {
+        const res = await fetch('/api/timeline', { cache: 'no-store', headers: etag ? { 'If-None-Match': etag } : {} });
+        if (res.status === 200) {
+          etag = res.headers.get('ETag');
+          draw(await res.json());
+        } else if (res.status !== 304) {
+          throw new Error((await res.json()).error || res.statusText);
+        }
+        $('dot').classList.remove('lost');
+        $('dot').setAttribute('aria-label', 'Live');
+      } catch (err) {
+        $('dot').classList.add('lost');
+        $('dot').setAttribute('aria-label', 'Connection lost: ' + err.message);
+      }
+      setTimeout(poll, 2000);
+    }
+    poll();
+  </script>
+</body>
+</html>
