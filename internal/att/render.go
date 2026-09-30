@@ -1,0 +1,143 @@
+package att
+
+import (
+	"fmt"
+	"io"
+	"math"
+	"strings"
+	"time"
+)
+
+const barWidth = 20
+
+type palette struct{ agent, you, ait, dim, reset string }
+
+func newPalette(colour bool) palette {
+	if !colour {
+		return palette{}
+	}
+	return palette{agent: "\033[32m", you: "\033[33m", ait: "\033[36m", dim: "\033[2m", reset: "\033[0m"}
+}
+
+// Render writes the timeline as a plain terminal report.
+func Render(w io.Writer, tl Timeline, title string, colour bool) {
+	p := newPalette(colour)
+	if len(tl.Turns) == 0 {
+		fmt.Fprintln(w, "No turns found in this session.")
+		return
+	}
+
+	scale := longest(tl.Turns)
+	fmt.Fprintf(w, "%s%s  -  %s%s\n\n", p.dim, title, tl.Turns[0].Start.Local().Format("Mon 2 Jan 2006"), p.reset)
+
+	row := func(at time.Time, colour, label, dur, bar, note string) {
+		stamp := ""
+		if !at.IsZero() {
+			stamp = at.Local().Format("15:04:05")
+		}
+		fmt.Fprintf(w, "%8s  %s%-7s %-7s %s%s  %s\n", stamp, colour, label, dur, bar, p.reset, note)
+	}
+	said := func(t Turn) string {
+		if t.Prompt == "" {
+			return p.dim + "(slash command)" + p.reset
+		}
+		return `"` + snippet(t.Prompt) + `"`
+	}
+
+	// One stream: the agent works, then waits, and each wait ends with
+	// whatever unblocked it - an approval, an answer, or your next message.
+	first := tl.Turns[0]
+	fmt.Fprintf(w, "%s  %-7s %s\n", first.Start.Local().Format("15:04:05"), "start", said(first))
+	for i, t := range tl.Turns {
+		ait := t.Ait
+		for j, seg := range t.Segments {
+			if seg.Wait {
+				row(time.Time{}, p.you, "waiting", Dur(seg.D), bar(seg.D, scale, '░'), ">> "+snippet(seg.Label))
+				continue
+			}
+			dur, note := Dur(seg.D), ""
+			if !t.Exact {
+				dur = "~" + dur
+			}
+			if t.Running && j == len(t.Segments)-1 {
+				note = "still running"
+			}
+			row(seg.Start, p.agent, "agent", dur, bar(seg.D, scale, '█'), note)
+			for len(ait) > 0 && (j == len(t.Segments)-1 || ait[0].At.Before(seg.Start.Add(seg.D))) {
+				ev := ait[0]
+				row(ev.At, p.ait, "", "", "◆ ait "+ev.Action+" "+ev.ID, "")
+				ait = ait[1:]
+			}
+		}
+		if i+1 < len(tl.Turns) {
+			next := tl.Turns[i+1]
+			row(time.Time{}, p.you, "waiting", Dur(next.GapBefore), bar(next.GapBefore, scale, '░'), ">> "+said(next))
+		}
+	}
+
+	active, blocked, between, wall := tl.Totals()
+	summary := func(colour, label, value, note string) {
+		fmt.Fprintf(w, "%s%-23s%s%7s  %s\n", colour, label, p.reset, value, note)
+	}
+	fmt.Fprintln(w)
+	summary(p.agent, "Agent working", Dur(active), "")
+	summary(p.you, "Waiting mid-turn", Dur(blocked), "(questions, permission prompts)")
+	summary(p.you, "Waiting between turns", Dur(between), "")
+	summary("", "Wall clock", Dur(wall), "")
+
+	if len(tl.Issues) > 0 {
+		fmt.Fprintf(w, "\n%sIssues%s\n", p.ait, p.reset)
+		for _, is := range tl.Issues {
+			end, span := "still open", ""
+			if !is.Closed.IsZero() {
+				end = "closed " + is.Closed.Local().Format("15:04")
+				span = " of " + Dur(is.Wall) + " wall clock"
+			}
+			fmt.Fprintf(w, "  %-20s claimed %s, %s  -  agent %s%s\n", is.ID, is.Claimed.Local().Format("15:04"), end, Dur(is.Active), span)
+		}
+	}
+}
+
+// longest is the longest stretch of any kind in the session, which fills the
+// full bar width.
+func longest(turns []Turn) time.Duration {
+	l := time.Second
+	for _, t := range turns {
+		l = max(l, t.GapBefore)
+		for _, s := range t.Segments {
+			l = max(l, s.D)
+		}
+	}
+	return l
+}
+
+// bar draws d on a square-root scale against the session's longest stretch:
+// long waits still clearly dominate, short bursts of work stay visible, and
+// nothing is capped. The exact figure sits next to it.
+func bar(d, longest time.Duration, ch rune) string {
+	frac := math.Sqrt(d.Seconds() / longest.Seconds())
+	n := min(max(int(math.Ceil(frac*barWidth)), 1), barWidth)
+	return strings.Repeat(string(ch), n) + strings.Repeat(" ", barWidth-n)
+}
+
+func snippet(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) > 50 {
+		return string(r[:49]) + "…"
+	}
+	return s
+}
+
+// Dur formats a duration compactly: 13s, 5m37s, 1h02m.
+func Dur(d time.Duration) string {
+	d = d.Round(time.Second)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+	default:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+}
