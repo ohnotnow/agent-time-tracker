@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        run: |
+          # macOS
+          GOOS=darwin GOARCH=amd64  go build -ldflags="-s -w" -o dist/att-darwin-amd64 ./cmd/att
+          GOOS=darwin GOARCH=arm64  go build -ldflags="-s -w" -o dist/att-darwin-arm64 ./cmd/att
+
+          # Linux
+          GOOS=linux GOARCH=amd64   go build -ldflags="-s -w" -o dist/att-linux-amd64 ./cmd/att
+          GOOS=linux GOARCH=arm64   go build -ldflags="-s -w" -o dist/att-linux-arm64 ./cmd/att
+
+          # Windows
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/att-windows-amd64.exe ./cmd/att
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
